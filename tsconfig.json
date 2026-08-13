@@ -1,0 +1,29 @@
+{
+	"compilerOptions": {
+		"target": "esnext",
+		"lib": ["esnext"],
+		"module": "esnext",
+		"declaration": false,
+		"moduleResolution": "bundler",
+		"types": ["./worker-configuration.d.ts"],
+		"noEmit": true,
+		"isolatedModules": true,
+		"allowSyntheticDefaultImports": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"strict": true,
+		"resolveJsonModule": true,
+		"allowJs": true,
+		"checkJs": false,
+		"baseUrl": ".",
+		"rootDir": ".",
+		"paths": {
+			"$*": ["./src/packages/*"],
+			"^*": ["./src/modules/*"],
+			"~*": ["./src/database/*"],
+			"$types/*": ["./types/*"],
+			"@app/*": ["./src/app/*"]
+		}
+	},
+	"include": ["./src/**/*.ts", "./types/**/*.ts"]
+}

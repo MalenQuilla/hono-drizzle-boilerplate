@@ -1,0 +1,23 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"compatibility_date": "2025-10-08",
+	"main": "src/app/index.ts",
+	"name": "hono-drizzle-boilerplate",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"nodejs_compat_populate_process_env"
+	],
+	"minify": true,
+	"upload_source_maps": false,
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	},
+	"r2_buckets": [
+		{
+			"binding": "R2_BUCKET",
+			"bucket_name": "example-r2",
+			"preview_bucket_name": "example-r2"
+		}
+	]
+}
