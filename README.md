@@ -112,6 +112,166 @@ Better Auth is mounted directly as a Hono handler (`^auth` -> `/api/auth/*`). Mo
 
 Turso (libSQL) via `drizzle-orm`/`drizzle-kit` (`1.0.0-beta.15`). Config in `drizzle.config.ts`: schema files are `src/database/drizzle/schemas/index.ts` + `relations.ts`, migrations output to `src/database/migrations`. `$db()` (`src/packages/libs/db.ts`) is a lazily-initialized singleton client. Helpers: `withTransactionBuilder` for chainable transaction/exec, `buildConflictUpdateColumns` for upsert `ON CONFLICT` sets, `buildSqlFromRelationsFilter` / `fuzzy` for relational-filter and fuzzy-search SQL.
 
+## Library usage guide
+
+Reference for the reusable helpers in `src/packages/libs/db.ts`, `src/packages/libs/zod.ts`, and `src/packages/utils/paginate.ts`. Examples below use the built-in `user`/`session`/`account` schema and relations (`src/database/drizzle/relations.ts`).
+
+### `$libs/db` (`src/packages/libs/db.ts`)
+
+**`withTransactionBuilder(fn)`**
+Wraps a query function so it can run against the default `$db()` client, or be redirected onto an existing transaction host. Returns a chainable builder: `.transaction(tx)` swaps the client, `.exec()` runs `fn` and returns its result.
+
+```ts
+import { withTransactionBuilder } from "$libs/db";
+import { user } from "~drizzle/schemas";
+
+export const mutateUserById = (id: string, userData: Omit<TInsertUser, "id" | "role">) =>
+	withTransactionBuilder(async (db) => {
+		const [updatedUser] = await db
+			.update(user)
+			.set(userData)
+			.where(eq(user.id, id))
+			.returning();
+
+		return updatedUser;
+	});
+
+// standalone — runs against $db() directly
+await mutateUserById(id, { email }).exec();
+
+// joined — runs inside a caller's transaction instead
+await $db().transaction(async (tx) => {
+	await mutateUserById(id, { email }).transaction(tx).exec();
+	// ...more mutations sharing the same tx
+});
+```
+
+`mutateUserById` doesn't know or care whether it's standalone or part of a bigger transaction — the caller decides by calling `.transaction(tx)` before `.exec()`.
+
+**`buildConflictUpdateColumns(table, columns)`**
+Builds the `set` object for `.onConflictDoUpdate()` upserts — maps each listed column to `excluded.<column>`.
+
+```ts
+import { buildConflictUpdateColumns } from "$libs/db";
+import { user } from "~drizzle/schemas";
+
+await db
+	.insert(user)
+	.values(rows)
+	.onConflictDoUpdate({
+		target: user.id,
+		set: buildConflictUpdateColumns(user, ["name", "email", "image"]),
+	});
+```
+
+**`buildSqlFromRelationsFilter(schema, filters)`**
+Converts an RQBv2 relational filter object (same shape as `db.query.<schema>.findMany({ where })`) into a raw `SQL` condition, for cases where you need that filter as a plain `where()` clause instead of inside `db.query`.
+
+```ts
+import { buildSqlFromRelationsFilter } from "$libs/db";
+import { user } from "~drizzle/schemas";
+
+const condition = buildSqlFromRelationsFilter("user", {
+	role: { eq: "ADMIN" },
+});
+
+await db.select().from(user).where(condition);
+```
+
+Common pairing: reuse the same relational `where` for both `db.query.<schema>.findMany` (paginated rows) and `db.$count` (total count for pagination metadata) — `db.$count` needs a plain `SQL` condition, not the relational filter object, so run it through `buildSqlFromRelationsFilter` first.
+
+```ts
+import { buildSqlFromRelationsFilter } from "$libs/db";
+import { user } from "~drizzle/schemas";
+import type { TWhereConditions } from "$types/common";
+
+const where: TWhereConditions<"user"> = {
+	role: { eq: "ADMIN" },
+};
+
+const [rows, total] = await Promise.all([
+	db.query.user.findMany({ where, limit, offset }),
+	db.$count(user, buildSqlFromRelationsFilter("user", where)),
+]);
+```
+
+**`buildFuzzyFilter(columns, term)`**
+Builds an `OR`-of-fuzzy-LIKE relational filter (same shape consumed by `db.query.<schema>.findMany({ where })` or `buildSqlFromRelationsFilter`) across multiple columns of one table.
+
+```ts
+import { buildFuzzyFilter } from "$libs/db";
+
+const where = buildFuzzyFilter<"user">(["name", "username", "email"], search);
+
+const rows = await $db().query.user.findMany({ where });
+```
+
+**`fuzzy(column, value)`**
+Raw single-column fuzzy match (`translit(...) LIKE '%' || translit(...) || '%'`), for use directly inside `.where()` on a query builder call.
+
+```ts
+import { fuzzy } from "$libs/db";
+import { user } from "~drizzle/schemas";
+
+await db.select().from(user).where(fuzzy(user.email, search));
+```
+
+### `$libs/zod` (`src/packages/libs/zod.ts`)
+
+**`RangeSchema(startSchema, endSchema)`**
+Optional `{ start, end }` object schema that adds a validation issue when both `start` and `end` are present and `start <= end` is false (i.e. `start` must be less than or equal to `end`). Use it for numeric/date range query params.
+
+```ts
+import { RangeSchema } from "$libs/zod";
+import { z } from "@hono/zod-openapi";
+
+const CreatedAtRange = RangeSchema(z.coerce.number(), z.coerce.number());
+```
+
+**`zodQueryBuilder()`**
+Fluent builder for list-endpoint query schemas. Chain `.extend(shape)` for custom fields, `.paginable()` to add `page`/`limit` (and, after `.build()`, a derived `offset`), `.searchable(description?)` to add an optional `search` string, `.orderable(description?)` to add an `order` enum (`OrderEnum`, default `ASC`). Finish with `.build()` to get the final Zod schema (with the pagination `offset` transform applied).
+
+```ts
+import { zodQueryBuilder } from "$libs/zod";
+import { z } from "@hono/zod-openapi";
+
+export const ListUsersQuery = zodQueryBuilder()
+	.extend({ role: z.enum(["USER", "ADMIN"]).optional() })
+	.paginable()
+	.searchable("Search by name, username or email")
+	.orderable("Order by created date")
+	.build();
+
+// parsed shape: { role?, page, limit, offset, search?, order }
+```
+
+Order of chained calls doesn't matter; `.build()` always applies pagination -> search -> order on top of `.extend()`'s shape.
+
+**`TPaginationQuery` / `TZodQueryBuilder`**
+Types only — `TPaginationQuery` is the inferred `{ page, limit }` shape (what `paginateFrom` expects in `opts`); `TZodQueryBuilder<T, U>` is the return type of `zodQueryBuilder()`, useful for typing a function that accepts a builder before `.build()` is called.
+
+### `$utils/paginate` (`src/packages/utils/paginate.ts`)
+
+**`paginateFrom(data, total, opts)`**
+Wraps a page of rows plus a total row count into the standard `TPaginated<T>` shape (`{ data, metadata }`) used across list responses — computes `total_pages`, `has_next`, `has_prev` from `opts.page`/`opts.limit`.
+
+```ts
+import { paginateFrom } from "$utils/paginate";
+import { ListUsersQuery } from "^users/dto";
+
+export const listUsers: TAppRouteHandler<TListRoute> = async (c) => {
+	const query = c.req.valid("query"); // { page, limit, offset, ... } from ListUsersQuery
+	const [data, [{ total }]] = await Promise.all([
+		db.query.user.findMany({ limit: query.limit, offset: query.offset }),
+		db.select({ total: count() }).from(user),
+	]);
+
+	return c.json({ status: "success", ...paginateFrom(data, total, query) });
+};
+```
+
+`opts` just needs `page` and `limit` — pass the parsed query straight through when it came from `zodQueryBuilder().paginable().build()`.
+
 ## Deployment
 
 Configured in `wrangler.json`: entry `src/app/index.ts`, worker name `hono-drizzle-boilerplate`, R2 bucket binding `R2_BUCKET`, observability enabled. `pnpm check` runs `tsc` + a deploy dry-run before `pnpm deploy` actually ships.
