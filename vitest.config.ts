@@ -19,14 +19,13 @@ export default defineConfig({
 	test: {
 		environment: "node",
 		globals: false,
-		include: ["src/**/*.test.ts"],
+		include: ["test/**/*.test.ts"],
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage",
 			include: ["src/**/*.ts"],
 			exclude: [
-				"src/**/*.test.ts",
 				"src/database/drizzle/schemas/**",
 				"src/database/migrations/**",
 			],

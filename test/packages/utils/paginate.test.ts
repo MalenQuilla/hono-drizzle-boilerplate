@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { paginateFrom } from "./paginate";
+import { paginateFrom } from "$utils/paginate";
 
 describe("paginateFrom", () => {
 	it("returns the first page of 25 items with next and no prev", () => {

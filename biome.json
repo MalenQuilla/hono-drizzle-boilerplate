@@ -10,6 +10,7 @@
 		"includes": [
 			"**",
 			"!**/dist",
+			"!coverage",
 			"!**/build",
 			"!**/*.gen.ts",
 			"!*.lock",
