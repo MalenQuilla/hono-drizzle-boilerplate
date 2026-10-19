@@ -15,7 +15,6 @@
 		"resolveJsonModule": true,
 		"allowJs": true,
 		"checkJs": false,
-		"baseUrl": ".",
 		"rootDir": ".",
 		"paths": {
 			"$*": ["./src/packages/*"],
